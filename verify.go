@@ -37,8 +37,8 @@ func (m *IPLDTree) Verify(dataBlock blocks.Block, proof *Proof) (bool, error) {
 	return Verify(m.ctx, m.blockstore, dataBlock, proof, m.root.Data.Cid(), m.Config)
 }
 
-// VerifyWithPath checks if the data block is valid using the Merkle Tree proof and the provided root hash.
-// It differs from Verify() because it relies on the blockstore to resolve the sibling nodes.
+// Verify checks if the data block is valid using the Merkle Tree proof and the provided root hash.
+// It relies on the blockstore to resolve the sibling nodes.
 func Verify(ctx context.Context, bs Blockstore, dataBlock blocks.Block, proof *Proof, root cid.Cid, config Config) (bool, error) {
 	if proof == nil {
 		return false, ErrProofIsNil
@@ -59,7 +59,7 @@ func Verify(ctx context.Context, bs Blockstore, dataBlock blocks.Block, proof *P
 		return false, fmt.Errorf("root from blockstore: %w", err)
 	}
 
-	// get sibs
+	// get siblings through root links
 	bit := uint32(1 << (proof.Len - 1))
 	var link cid.Cid
 	for i := 0; i < int(proof.Len); i++ {
