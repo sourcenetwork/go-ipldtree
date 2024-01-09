@@ -22,6 +22,7 @@
 
 package merkletree
 
+/*
 import (
 	"fmt"
 
@@ -29,7 +30,7 @@ import (
 )
 
 // treeBuild builds the Merkle Tree and stores all the nodes.
-func (m *MerkleTree) treeBuild() (err error) {
+func (m *IPLDTree[T, S]) treeBuild() (err error) {
 	finishMap := make(chan struct{})
 	go m.workerBuildLeafMap(finishMap)
 	m.initNodes()
@@ -60,7 +61,7 @@ func (m *MerkleTree) treeBuild() (err error) {
 }
 
 // treeBuildParallel builds the Merkle Tree and stores all the nodes in parallel.
-func (m *MerkleTree) treeBuildParallel() error {
+func (m *IPLDTree[T, S]) treeBuildParallel() error {
 	finishMap := make(chan struct{})
 	go m.workerBuildLeafMap(finishMap)
 	m.initNodes()
@@ -107,7 +108,7 @@ func (m *MerkleTree) treeBuildParallel() error {
 	return nil
 }
 
-func (m *MerkleTree) workerBuildLeafMap(finishChan chan struct{}) {
+func (m *IPLDTree[T, S]) workerBuildLeafMap(finishChan chan struct{}) {
 	m.leafMapMu.Lock()
 	defer m.leafMapMu.Unlock()
 
@@ -117,7 +118,7 @@ func (m *MerkleTree) workerBuildLeafMap(finishChan chan struct{}) {
 	finishChan <- struct{}{} // empty channel to serve as a wait group for map generation
 }
 
-func (m *MerkleTree) initNodes() {
+func (m *IPLDTree[T, S]) initNodes() {
 	m.nodes = make([][][]byte, m.Depth)
 	m.nodes[0] = make([][]byte, m.NumLeaves)
 	copy(m.nodes[0], m.Leaves)
@@ -134,3 +135,4 @@ func appendNodeIfOdd(buffer [][]byte) [][]byte {
 
 	return buffer
 }
+*/

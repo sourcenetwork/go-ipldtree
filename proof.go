@@ -22,31 +22,34 @@
 
 package merkletree
 
+import blocks "github.com/ipfs/go-block-format"
+
 // Proof represents a Merkle Tree proof.
 type Proof struct {
-	Siblings [][]byte // Sibling nodes to the Merkle Tree path of the data block.
-	Path     uint32   // Path variable indicating whether the neighbor is on the left or right.
+	// Siblings []Node // Sibling nodes to the Merkle Tree path of the data block.
+	Path uint32 // Path variable indicating whether the neighbor is on the left or right.
+	Len  uint8  // Number of steps in the proof (height of the tree - 1)
 }
 
 // Proof generates the Merkle proof for a data block using the previously generated Merkle Tree structure.
 // This method is only available when the configuration mode is ModeTreeBuild or ModeProofGenAndTreeBuild.
 // In ModeProofGen, proofs for all the data blocks are already generated, and the Merkle Tree structure
 // is not cached.
-func (m *MerkleTree) Proof(dataBlock DataBlock) (*Proof, error) {
+func (m *IPLDTree) Proof(dataBlock blocks.Block) (*Proof, error) {
 	if m.Mode != ModeTreeBuild && m.Mode != ModeProofGenAndTreeBuild {
 		return nil, ErrProofInvalidModeTreeNotBuilt
 	}
 
 	// Convert the data block to a leaf.
-	leaf, err := dataBlockToLeaf(dataBlock, m.HashFunc, m.DisableLeafHashing)
+	leaf, err := dataBlockToLeaf(dataBlock, nil, m.DisableLeafHashing)
 	if err != nil {
 		return nil, err
 	}
 
 	// Retrieve the index of the leaf in the Merkle Tree.
-	m.leafMapMu.Lock()
-	idx, ok := m.leafMap[string(leaf)]
-	m.leafMapMu.Unlock()
+	// m.leafMapMu.Lock()
+	idx, ok := m.leafMap[leaf.Data.Cid().String()]
+	// m.leafMapMu.Unlock()
 
 	if !ok {
 		return nil, ErrProofInvalidDataBlock
@@ -55,10 +58,10 @@ func (m *MerkleTree) Proof(dataBlock DataBlock) (*Proof, error) {
 	// Compute the path and siblings for the proof.
 	var (
 		path     uint32
-		siblings = make([][]byte, m.Depth)
+		siblings = make([]Node, m.depth)
 	)
 
-	for i := 0; i < m.Depth; i++ {
+	for i := 0; i < m.depth; i++ {
 		if idx&1 == 1 {
 			siblings[i] = m.nodes[i][idx-1]
 		} else {
@@ -70,7 +73,6 @@ func (m *MerkleTree) Proof(dataBlock DataBlock) (*Proof, error) {
 	}
 
 	return &Proof{
-		Path:     path,
-		Siblings: siblings,
+		Path: path,
 	}, nil
 }

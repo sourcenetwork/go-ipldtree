@@ -22,9 +22,10 @@
 
 package merkletree
 
+/*
 import "sync"
 
-func (m *MerkleTree) proofGenAndTreeBuild() error {
+func (m *IPLDTree[T, S]) proofGenAndTreeBuild() error {
 	if err := m.treeBuild(); err != nil {
 		return err
 	}
@@ -34,7 +35,7 @@ func (m *MerkleTree) proofGenAndTreeBuild() error {
 	return nil
 }
 
-func (m *MerkleTree) proofGenAndTreeBuildParallel() error {
+func (m *IPLDTree[T, S]) proofGenAndTreeBuildParallel() error {
 	if err := m.treeBuildParallel(); err != nil {
 		return err
 	}
@@ -44,7 +45,7 @@ func (m *MerkleTree) proofGenAndTreeBuildParallel() error {
 	return nil
 }
 
-func (m *MerkleTree) computeAllProofsFromTree() {
+func (m *IPLDTree[T, S]) computeAllProofsFromTree() {
 	m.initProofs()
 
 	for step := 0; step < len(m.nodes); step++ {
@@ -59,7 +60,7 @@ func (m *MerkleTree) computeAllProofsFromTree() {
 	}
 }
 
-func (m *MerkleTree) computeAllProofsFromTreeParallel() {
+func (m *IPLDTree[T, S]) computeAllProofsFromTreeParallel() {
 	m.initProofs()
 
 	for step := 0; step < len(m.nodes); step++ {
@@ -101,3 +102,4 @@ func updateProofInTwoBatchesFromTree(proofs []*Proof, buffer [][]byte, idx, batc
 		proofs[i].Siblings = append(proofs[i].Siblings, buffer[idx])
 	}
 }
+*/

@@ -22,28 +22,20 @@
 
 package merkletree
 
-import (
-	"fmt"
-	"sync"
-
-	"golang.org/x/sync/errgroup"
-)
-
 // proofGen constructs the Merkle Tree and generates the Merkle proofs for each leaf.
 // It returns an error if there is an issue during the generation process.
-func (m *MerkleTree) proofGen() (err error) {
+func (m *IPLDTree) proofGen() (err error) {
 	m.initProofs()
-	buffer, bufferSize := initBuffer(m.Leaves)
+	buffer, bufferSize := initBuffer(m.leaves)
 
-	for step := 0; step < m.Depth; step++ {
+	for step := 0; step < m.depth; step++ {
 		bufferSize = fixOddNumOfNodes(buffer, bufferSize, step)
 		m.updateProofs(buffer, bufferSize, step)
 
 		for idx := 0; idx < bufferSize; idx += 2 {
 			leftIdx := idx << step
 			rightIdx := min(leftIdx+(1<<step), len(buffer)-1)
-			buffer[leftIdx], err = m.HashFunc(m.concatHashFunc(buffer[leftIdx], buffer[rightIdx]))
-
+			buffer[leftIdx], err = m.MergeFunc(m.ctx, buffer[leftIdx], buffer[rightIdx])
 			if err != nil {
 				return
 			}
@@ -52,75 +44,75 @@ func (m *MerkleTree) proofGen() (err error) {
 		bufferSize >>= 1
 	}
 
-	m.Root = buffer[0]
+	m.root = buffer[0]
 
 	return
 }
 
-// proofGenParallel generates proofs concurrently for the MerkleTree.
-func (m *MerkleTree) proofGenParallel() error {
-	m.initProofs()
-	buffer, bufferSize := initBuffer(m.Leaves)
-	numRoutines := m.NumRoutines
+// proofGenParallel generates proofs concurrently for the IPLDTree.
+// func (m *IPLDTree[T, S]) proofGenParallel() error {
+// 	m.initProofs()
+// 	buffer, bufferSize := initBuffer(m.leaves)
+// 	numRoutines := m.NumRoutines
 
-	for step := 0; step < m.Depth; step++ {
-		// Limit the number of workers to the previous level length.
-		numRoutines = min(numRoutines, bufferSize)
-		bufferSize = fixOddNumOfNodes(buffer, bufferSize, step)
-		m.updateProofsParallel(buffer, bufferSize, step)
+// 	for step := 0; step < m.Depth; step++ {
+// 		// Limit the number of workers to the previous level length.
+// 		numRoutines = min(numRoutines, bufferSize)
+// 		bufferSize = fixOddNumOfNodes(buffer, bufferSize, step)
+// 		m.updateProofsParallel(buffer, bufferSize, step)
 
-		eg := new(errgroup.Group)
+// 		eg := new(errgroup.Group)
 
-		for workerIdx := 0; workerIdx < numRoutines; workerIdx++ {
-			startIdx := workerIdx << 1
+// 		for workerIdx := 0; workerIdx < numRoutines; workerIdx++ {
+// 			startIdx := workerIdx << 1
 
-			eg.Go(func() error {
-				var err error
-				for i := startIdx; i < bufferSize; i += numRoutines << 1 {
-					leftIdx := i << step
-					rightIdx := min(leftIdx+(1<<step), len(buffer)-1)
-					buffer[leftIdx], err = m.HashFunc(m.concatHashFunc(buffer[leftIdx], buffer[rightIdx]))
-					if err != nil {
-						return err
-					}
-				}
+// 			eg.Go(func() error {
+// 				var err error
+// 				for i := startIdx; i < bufferSize; i += numRoutines << 1 {
+// 					leftIdx := i << step
+// 					rightIdx := min(leftIdx+(1<<step), len(buffer)-1)
+// 					buffer[leftIdx], err = m.HashFunc(m.concatHashFunc(buffer[leftIdx], buffer[rightIdx]))
+// 					if err != nil {
+// 						return err
+// 					}
+// 				}
 
-				return nil
-			})
-		}
+// 				return nil
+// 			})
+// 		}
 
-		if err := eg.Wait(); err != nil {
-			return fmt.Errorf("proofGenParallel: %w", err)
-		}
+// 		if err := eg.Wait(); err != nil {
+// 			return fmt.Errorf("proofGenParallel: %w", err)
+// 		}
 
-		bufferSize >>= 1
-	}
+// 		bufferSize >>= 1
+// 	}
 
-	m.Root = buffer[0]
+// 	m.root = buffer[0]
 
-	return nil
-}
+// 	return nil
+// }
 
-// initProofs initializes the MerkleTree's Proofs with the appropriate size and depth.
+// initProofs initializes the IPLDTree's Proofs with the appropriate size and depth.
 // This is to reduce overhead of slice resizing during the generation process.
-func (m *MerkleTree) initProofs() {
-	m.Proofs = make([]*Proof, m.NumLeaves)
-	for i := 0; i < m.NumLeaves; i++ {
-		m.Proofs[i] = new(Proof)
-		m.Proofs[i].Siblings = make([][]byte, 0, m.Depth)
+func (m *IPLDTree) initProofs() {
+	m.proofs = make([]*Proof, m.numLeaves)
+	for i := 0; i < m.numLeaves; i++ {
+		m.proofs[i] = new(Proof)
+		m.proofs[i].Len = uint8(m.depth)
 	}
 }
 
 // initBuffer initializes the buffer with the leaves and returns the buffer size.
 // If the number of leaves is odd, the buffer size is increased by 1.
-func initBuffer(leaves [][]byte) (buffer [][]byte, numLeaves int) {
+func initBuffer(leaves []Node) (buffer []Node, numLeaves int) {
 	numLeaves = len(leaves)
 
 	// If the number of leaves is odd, make initial buffer size even by adding 1.
 	if numLeaves&1 == 1 {
-		buffer = make([][]byte, numLeaves+1)
+		buffer = make([]Node, numLeaves+1)
 	} else {
-		buffer = make([][]byte, numLeaves)
+		buffer = make([]Node, numLeaves)
 	}
 
 	copy(buffer, leaves)
@@ -130,7 +122,7 @@ func initBuffer(leaves [][]byte) (buffer [][]byte, numLeaves int) {
 
 // fixOddNumOfNodes adjusts the buffer size if it has an odd number of nodes.
 // It appends the last node to the buffer if the buffer length is odd.
-func fixOddNumOfNodes(buffer [][]byte, bufferSize, step int) int {
+func fixOddNumOfNodes(buffer []Node, bufferSize, step int) int {
 	// If the buffer length is even, no adjustment is needed.
 	if bufferSize&1 == 0 {
 		return bufferSize
@@ -146,51 +138,48 @@ func fixOddNumOfNodes(buffer [][]byte, bufferSize, step int) int {
 }
 
 // updateProofs updates the proofs for all the leaves while constructing the Merkle Tree.
-func (m *MerkleTree) updateProofs(buffer [][]byte, bufferSize, step int) {
+func (m *IPLDTree) updateProofs(buffer []Node, bufferSize, step int) {
 	batch := 1 << step
 	for i := 0; i < bufferSize; i += 2 {
-		updateProofInTwoBatches(m.Proofs, buffer, i, batch, step)
+		updateProofInTwoBatches(m.proofs, buffer, i, batch, step)
 	}
 }
 
 // updateProofsParallel updates the proofs for all the leaves while constructing the Merkle Tree in parallel.
-func (m *MerkleTree) updateProofsParallel(buffer [][]byte, bufferLength, step int) {
-	var (
-		batch = 1 << step
-		wg    sync.WaitGroup
-	)
+// func (m *IPLDTree[T, S]) updateProofsParallel(buffer [][]byte, bufferLength, step int) {
+// 	var (
+// 		batch = 1 << step
+// 		wg    sync.WaitGroup
+// 	)
 
-	numRoutines := min(m.NumRoutines, bufferLength)
-	wg.Add(numRoutines)
+// 	numRoutines := min(m.NumRoutines, bufferLength)
+// 	wg.Add(numRoutines)
 
-	for startIdx := 0; startIdx < numRoutines; startIdx++ {
-		go func(startIdx int) {
-			defer wg.Done()
+// 	for startIdx := 0; startIdx < numRoutines; startIdx++ {
+// 		go func(startIdx int) {
+// 			defer wg.Done()
 
-			for i := startIdx; i < bufferLength; i += numRoutines << 1 {
-				updateProofInTwoBatches(m.Proofs, buffer, i, batch, step)
-			}
-		}(startIdx << 1)
-	}
-	wg.Wait()
-}
+// 			for i := startIdx; i < bufferLength; i += numRoutines << 1 {
+// 				updateProofInTwoBatches(m.Proofs, buffer, i, batch, step)
+// 			}
+// 		}(startIdx << 1)
+// 	}
+// 	wg.Wait()
+// }
 
 // updateProofInTwoBatches updates the path and the siblings of the proof in two batches.
-func updateProofInTwoBatches(proofs []*Proof, buffer [][]byte, idx, batch, step int) {
+func updateProofInTwoBatches(proofs []*Proof, buffer []Node, idx, batch, step int) {
 	start := idx * batch
 	end := min(start+batch, len(proofs))
-	siblingNodeIdx := min((idx+1)<<step, len(buffer)-1)
 
 	for i := start; i < end; i++ {
 		proofs[i].Path += 1 << step
-		proofs[i].Siblings = append(proofs[i].Siblings, buffer[siblingNodeIdx])
 	}
 
-	start += batch
-	end = min(start+batch, len(proofs))
-	siblingNodeIdx = min(idx<<step, len(buffer)-1)
+	// start += batch
+	// end = min(start+batch, len(proofs))
+	// siblingNodeIdx = min(idx<<step, len(buffer)-1)
 
-	for i := start; i < end; i++ {
-		proofs[i].Siblings = append(proofs[i].Siblings, buffer[siblingNodeIdx])
-	}
+	// for i := start; i < end; i++ {
+	// }
 }

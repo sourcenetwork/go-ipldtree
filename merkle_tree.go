@@ -27,9 +27,15 @@ package merkletree
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"math/bits"
-	"runtime"
-	"sync"
+
+	"github.com/ipfs/boxo/blockstore"
+	blocks "github.com/ipfs/go-block-format"
+	"github.com/ipfs/go-cid"
+	cbor "github.com/ipfs/go-ipld-cbor"
+	mh "github.com/multiformats/go-multihash"
 )
 
 const (
@@ -52,93 +58,159 @@ type typeConcatHashFunc func([]byte, []byte) []byte
 // Config is the configuration of Merkle Tree.
 type Config struct {
 	// Customizable hash function used for tree generation.
-	HashFunc TypeHashFunc
+	//HashFunc TypeHashFunc
+
+	// MergeFunc
+	MergeFunc MergeFunc
+
+	// CompareFunc
+	// CompareFunc CompareFunc
+
+	// // ExtFunc
+	// ExtFunc ExtFunc
+
 	// Number of goroutines run in parallel.
 	// If RunInParallel is true and NumRoutine is set to 0, use number of CPU as the number of goroutines.
-	NumRoutines int
+	//NumRoutines int
+
 	// Mode of the Merkle Tree generation.
 	Mode TypeConfigMode
+
 	// If RunInParallel is true, the generation runs in parallel, otherwise runs without parallelization.
 	// This increase the performance for the calculation of large number of data blocks, e.g. over 10,000 blocks.
-	RunInParallel bool
+	//RunInParallel bool
+
 	// SortSiblingPairs is the parameter for OpenZeppelin compatibility.
 	// If set to `true`, the hashing sibling pairs are sorted.
 	SortSiblingPairs bool
+
 	// If true, the leaf nodes are NOT hashed before being added to the Merkle Tree.
 	DisableLeafHashing bool
 }
 
-// MerkleTree implements the Merkle Tree data structure.
-type MerkleTree struct {
-	*Config
+type Contentable interface {
+	Cid() cid.Cid
+}
+
+type MergeFunc func(ctx context.Context, left, right Node) (Node, error)
+
+type Blockstore interface {
+	Put(context.Context, any) (blocks.Block, error)
+	Get(context.Context, cid.Cid) (blocks.Block, error)
+}
+
+func ipldMerge(blockstore Blockstore) MergeFunc {
+	return func(ctx context.Context, left, right Node) (Node, error) {
+		inner := []cid.Cid{left.Data.Cid(), right.Data.Cid()}
+		data, err := blockstore.Put(ctx, inner)
+		return Node{Data: data, Left: &left, Right: &right}, err
+	}
+}
+
+func ipldCompare(a, b Contentable) int {
+	return bytes.Compare(a.Cid().Bytes(), b.Cid().Bytes())
+}
+
+type CompareFunc[T any] func(a, b T) int
+
+// type ExtFunc[T any, S any] func(Node[T]) S
+
+type Node struct {
+	Data  blocks.Block
+	Left  *Node
+	Right *Node
+}
+
+type Result interface {
+	String() string
+	Equals(Result) bool
+}
+
+// IPLDTree implements the Merkle Tree data structure.
+type IPLDTree struct {
+	Config
+
+	ctx context.Context
+
+	blockstore Blockstore
+
 	// leafMap maps the data (converted to string) of each leaf node to its index in the Tree slice.
 	// It is only available when the configuration mode is set to ModeTreeBuild or ModeProofGenAndTreeBuild.
 	leafMap map[string]int
-	// leafMapMu is a mutex that protects concurrent access to the leafMap.
-	leafMapMu sync.Mutex
+
 	// concatHashFunc is the function for concatenating two hashes.
 	// If SortSiblingPairs in Config is true, then the sibling pairs are first sorted and then concatenated,
 	// supporting the OpenZeppelin Merkle Tree protocol.
 	// Otherwise, the sibling pairs are concatenated directly.
-	concatHashFunc typeConcatHashFunc
+	// mergeFn MergeFunc[T]
+
 	// nodes contains the Merkle Tree's internal node structure.
 	// It is only available when the configuration mode is set to ModeTreeBuild or ModeProofGenAndTreeBuild.
-	nodes [][][]byte
-	// Root is the hash of the Merkle root node.
-	Root []byte
+	nodes [][]Node
+
+	// root is the hash of the Merkle root node.
+	root Node
+
 	// Leaves are the hashes of the data blocks that form the Merkle Tree's leaves.
 	// These hashes are used to generate the tree structure.
 	// If the DisableLeafHashing configuration is set to true, the original data blocks are used as the leaves.
-	Leaves [][]byte
+	leaves []Node
+
 	// Proofs are the proofs to the data blocks generated during the tree building process.
-	Proofs []*Proof
+	proofs []*Proof
+
 	// Depth is the depth of the Merkle Tree.
-	Depth int
+	depth int
+
 	// NumLeaves is the number of leaves in the Merkle Tree.
 	// This value is fixed once the tree is built.
-	NumLeaves int
+	numLeaves int
 }
 
 // New generates a new Merkle Tree with the specified configuration and data blocks.
-func New(config *Config, blocks []DataBlock) (m *MerkleTree, err error) {
+func New(ctx context.Context, config *Config, blockstore blockstore.Blockstore, blocks []blocks.Block) (m *IPLDTree, err error) {
 	// Check if there are enough data blocks to build the tree.
 	if len(blocks) <= 1 {
 		return nil, ErrInvalidNumOfDataBlocks
 	}
 
-	// Initialize the configuration if it is not provided.
+	if blockstore == nil {
+		return nil, fmt.Errorf("missing blockstore")
+	}
+
+	blockservice := newBlockservice(blockstore)
+
+	// // Initialize the configuration if it is not provided.
 	if config == nil {
 		config = new(Config)
 	}
 
-	// Create a MerkleTree with the provided configuration.
-	m = &MerkleTree{
-		Config:    config,
-		NumLeaves: len(blocks),
-		Depth:     bits.Len(uint(len(blocks) - 1)),
+	if config.MergeFunc == nil {
+		config.MergeFunc = ipldMerge(blockservice)
+	}
+
+	// Create a IPLDTree with the provided configuration.
+	m = &IPLDTree{
+		ctx:        ctx,
+		blockstore: blockservice,
+		Config:     *config,
+		numLeaves:  len(blocks),
+		depth:      bits.Len(uint(len(blocks) - 1)),
 	}
 
 	// Hash concatenation function initialization.
-	if m.concatHashFunc == nil {
-		if m.SortSiblingPairs {
-			m.concatHashFunc = concatSortHash
-		} else {
-			m.concatHashFunc = concatHash
-		}
-	}
+	// if m.concatHashFunc == nil {
+	// 	if m.SortSiblingPairs {
+	// 		m.concatHashFunc = concatSortHash
+	// 	} else {
+	// 		m.concatHashFunc = concatHash
+	// 	}
+	// }
 
 	// Perform actions based on the configured mode.
 	// Set the mode to ModeProofGen by default if not specified.
 	if m.Mode == 0 {
 		m.Mode = ModeProofGen
-	}
-
-	if m.RunInParallel {
-		if err := m.newParallel(blocks); err != nil {
-			return nil, err
-		}
-
-		return m, nil
 	}
 
 	if err := m.new(blocks); err != nil {
@@ -148,27 +220,34 @@ func New(config *Config, blocks []DataBlock) (m *MerkleTree, err error) {
 	return m, nil
 }
 
-func (m *MerkleTree) new(blocks []DataBlock) error {
+func (m *IPLDTree) new(blocks []blocks.Block) error {
 	// Initialize the hash function.
-	if m.HashFunc == nil {
-		m.HashFunc = DefaultHashFunc
+	if m.MergeFunc == nil {
+		panic("hashfunc nil")
 	}
+	/* TODO
+	if m.CompareFunc == nil {
+		panic("comparefunc nil")
+	}
+	if m.ExtFunc == nil {
+		panic("extfunc nil")
+	}
+	TODO */
 
 	// Generate leaves.
 	var err error
-	m.Leaves, err = m.computeLeafNodes(blocks)
+	m.leaves, err = m.computeLeafNodes(blocks)
 
 	if err != nil {
 		return err
 	}
 
-	if m.Mode == ModeProofGen {
-		return m.proofGen()
-	}
-
 	// Initialize the leafMap for ModeTreeBuild and ModeProofGenAndTreeBuild.
 	m.leafMap = make(map[string]int)
 
+	return m.proofGen()
+
+	/* TODO
 	if m.Mode == ModeTreeBuild {
 		return m.treeBuild()
 	}
@@ -180,46 +259,48 @@ func (m *MerkleTree) new(blocks []DataBlock) error {
 
 	// Return an error if the configuration mode is invalid.
 	return ErrInvalidConfigMode
+	TODO */
+
 }
 
-func (m *MerkleTree) newParallel(blocks []DataBlock) error {
-	// Initialize the hash function.
-	if m.HashFunc == nil {
-		m.HashFunc = DefaultHashFuncParallel
-	}
+// func (m *IPLDTree[T, S]) newParallel(blocks []DataBlock) error {
+// 	// Initialize the hash function.
+// 	if m.HashFunc == nil {
+// 		m.HashFunc = DefaultHashFuncParallel
+// 	}
 
-	// Set NumRoutines to the number of CPU cores if not specified or invalid.
-	if m.NumRoutines <= 0 {
-		m.NumRoutines = runtime.NumCPU()
-	}
+// 	// Set NumRoutines to the number of CPU cores if not specified or invalid.
+// 	if m.NumRoutines <= 0 {
+// 		m.NumRoutines = runtime.NumCPU()
+// 	}
 
-	// Generate leaves.
-	var err error
-	m.Leaves, err = m.computeLeafNodesParallel(blocks)
+// 	// Generate leaves.
+// 	var err error
+// 	m.Leaves, err = m.computeLeafNodesParallel(blocks)
 
-	if err != nil {
-		return err
-	}
+// 	if err != nil {
+// 		return err
+// 	}
 
-	if m.Mode == ModeProofGen {
-		return m.proofGenParallel()
-	}
+// 	if m.Mode == ModeProofGen {
+// 		return m.proofGenParallel()
+// 	}
 
-	// Initialize the leafMap for ModeTreeBuild and ModeProofGenAndTreeBuild.
-	m.leafMap = make(map[string]int)
+// 	// Initialize the leafMap for ModeTreeBuild and ModeProofGenAndTreeBuild.
+// 	m.leafMap = make(map[string]int)
 
-	if m.Mode == ModeTreeBuild {
-		return m.treeBuildParallel()
-	}
+// 	if m.Mode == ModeTreeBuild {
+// 		return m.treeBuildParallel()
+// 	}
 
-	// Build the tree and generate proofs in ModeProofGenAndTreeBuild.
-	if m.Mode == ModeProofGenAndTreeBuild {
-		return m.proofGenAndTreeBuildParallel()
-	}
+// 	// Build the tree and generate proofs in ModeProofGenAndTreeBuild.
+// 	if m.Mode == ModeProofGenAndTreeBuild {
+// 		return m.proofGenAndTreeBuildParallel()
+// 	}
 
-	// Return an error if the configuration mode is invalid.
-	return ErrInvalidConfigMode
-}
+// 	// Return an error if the configuration mode is invalid.
+// 	return ErrInvalidConfigMode
+// }
 
 // concatHash concatenates two byte slices, b1 and b2.
 func concatHash(b1, b2 []byte) []byte {
@@ -230,7 +311,7 @@ func concatHash(b1, b2 []byte) []byte {
 	return result
 }
 
-// concatSortHash concatenates two byte slices, b1 and b2, in a sorted order.
+// concatSortHash concatenates two byte slices, b1 and b2, in a  sorted order.
 // The function ensures that the smaller byte slice (in terms of lexicographic order)
 // is placed before the larger one. This is used for compatibility with OpenZeppelin's
 // Merkle Proof verification implementation.
@@ -240,4 +321,34 @@ func concatSortHash(b1, b2 []byte) []byte {
 	}
 
 	return concatHash(b2, b1)
+}
+
+var _ Blockstore = (*blockservice)(nil)
+
+type blockservice struct {
+	bs blockstore.Blockstore
+}
+
+func newBlockservice(bs blockstore.Blockstore) blockservice {
+	return blockservice{bs}
+}
+
+func (bs blockservice) Put(ctx context.Context, obj any) (blocks.Block, error) {
+	var blk blocks.Block
+	var err error
+	if b, ok := obj.(blocks.Block); ok {
+		blk = b
+	} else {
+		blk, err = cbor.WrapObject(obj, mh.SHA2_256, -1)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = bs.bs.Put(ctx, blk)
+	return blk, err
+}
+
+func (bs blockservice) Get(ctx context.Context, c cid.Cid) (blocks.Block, error) {
+	return bs.bs.Get(ctx, c)
 }

@@ -22,23 +22,19 @@
 
 package merkletree
 
-import (
-	"fmt"
-
-	"golang.org/x/sync/errgroup"
-)
+import blocks "github.com/ipfs/go-block-format"
 
 // computeLeafNodes compute the leaf nodes from the data blocks.
-func (m *MerkleTree) computeLeafNodes(blocks []DataBlock) ([][]byte, error) {
+func (m *IPLDTree) computeLeafNodes(blocks []blocks.Block) ([]Node, error) {
 	var (
-		leaves             = make([][]byte, m.NumLeaves)
-		hashFunc           = m.HashFunc
+		leaves = make([]Node, m.numLeaves)
+		// hashFunc           = m.HashFunc
 		disableLeafHashing = m.DisableLeafHashing
 		err                error
 	)
 
-	for i := 0; i < m.NumLeaves; i++ {
-		if leaves[i], err = dataBlockToLeaf(blocks[i], hashFunc, disableLeafHashing); err != nil {
+	for i := 0; i < m.numLeaves; i++ {
+		if leaves[i], err = dataBlockToLeaf(blocks[i], nil, disableLeafHashing); err != nil {
 			return nil, err
 		}
 	}
@@ -47,55 +43,61 @@ func (m *MerkleTree) computeLeafNodes(blocks []DataBlock) ([][]byte, error) {
 }
 
 // computeLeafNodesParallel compute the leaf nodes from the data blocks in parallel.
-func (m *MerkleTree) computeLeafNodesParallel(blocks []DataBlock) ([][]byte, error) {
-	var (
-		lenLeaves          = len(blocks)
-		leaves             = make([][]byte, lenLeaves)
-		numRoutines        = m.NumRoutines
-		hashFunc           = m.HashFunc
-		disableLeafHashing = m.DisableLeafHashing
-		eg                 = new(errgroup.Group)
-	)
+// func (m *IPLDTree[T, S]) computeLeafNodesParallel(blocks []DataBlock) ([][]byte, error) {
+// 	var (
+// 		lenLeaves          = len(blocks)
+// 		leaves             = make([][]byte, lenLeaves)
+// 		numRoutines        = m.NumRoutines
+// 		hashFunc           = m.HashFunc
+// 		disableLeafHashing = m.DisableLeafHashing
+// 		eg                 = new(errgroup.Group)
+// 	)
 
-	numRoutines = min(numRoutines, lenLeaves)
+// 	numRoutines = min(numRoutines, lenLeaves)
 
-	for startIdx := 0; startIdx < numRoutines; startIdx++ {
-		startIdx := startIdx
+// 	for startIdx := 0; startIdx < numRoutines; startIdx++ {
+// 		startIdx := startIdx
 
-		eg.Go(func() error {
-			var err error
-			for i := startIdx; i < lenLeaves; i += numRoutines {
-				if leaves[i], err = dataBlockToLeaf(blocks[i], hashFunc, disableLeafHashing); err != nil {
-					return err
-				}
-			}
+// 		eg.Go(func() error {
+// 			var err error
+// 			for i := startIdx; i < lenLeaves; i += numRoutines {
+// 				if leaves[i], err = dataBlockToLeaf(blocks[i], hashFunc, disableLeafHashing); err != nil {
+// 					return err
+// 				}
+// 			}
 
-			return nil
-		})
-	}
+// 			return nil
+// 		})
+// 	}
 
-	if err := eg.Wait(); err != nil {
-		return nil, fmt.Errorf("computeLeafNodesParallel: %w", err)
-	}
+// 	if err := eg.Wait(); err != nil {
+// 		return nil, fmt.Errorf("computeLeafNodesParallel: %w", err)
+// 	}
 
-	return leaves, nil
-}
+// 	return leaves, nil
+// }
 
 // dataBlockToLeaf generates the leaf from the data block.
 // If the leaf hashing is disabled, the data block is returned as the leaf.
-func dataBlockToLeaf(block DataBlock, hashFunc TypeHashFunc, disableLeafHashing bool) ([]byte, error) {
-	blockBytes, err := block.Serialize()
-	if err != nil {
-		return nil, fmt.Errorf("dataBlockToLeaf: %w", err)
-	}
+func dataBlockToLeaf(block blocks.Block, hashFunc TypeHashFunc, disableLeafHashing bool) (Node, error) {
+	// blockBytes, err := block.Serialize()
+	// if err != nil {
+	// 	return nil, fmt.Errorf("dataBlockToLeaf: %w", err)
+	// }
 
-	if disableLeafHashing {
-		// copy the value so that the original byte slice is not modified
-		leaf := make([]byte, len(blockBytes))
-		copy(leaf, blockBytes)
+	// if disableLeafHashing {
+	// 	// copy the value so that the original byte slice is not modified
+	// 	leaf := make([]byte, len(blockBytes))
+	// 	copy(leaf, blockBytes)
 
-		return leaf, nil
-	}
+	// 	return leaf, nil
+	// }
 
-	return hashFunc(blockBytes)
+	// return hashFunc(blockBytes)
+
+	return Node{
+		Data:  block,
+		Left:  nil,
+		Right: nil,
+	}, nil
 }
